@@ -16,8 +16,10 @@ interface FileStructureOptions {
 }
 
 function extractRepoInfo(input: string): {
-  repoUrl: string | null;
-  repoName: string | null;
+  repoUrl?: string;
+  repoName?: string;
+  ref?: string;
+  folderPath: string;
   query: string;
 } {
   // Match the first URL in the string
@@ -26,11 +28,28 @@ function extractRepoInfo(input: string): {
   );
 
   if (!urlMatch || !urlMatch[0]) {
-    return { repoUrl: null, repoName: null, query: input };
+    return {
+      folderPath: '',
+      query: input,
+    };
   }
 
   let repoUrl = urlMatch[0];
   const restOfString = input.slice(urlMatch.index! + repoUrl.length).trim();
+
+  // Extract branch name and folder path before normalizing the URL
+  let ref: string | undefined;
+  let folderPath: string = '';
+
+  // Check for GitHub or similar patterns like /tree/branch/path or /blob/branch/path
+  const branchMatch = repoUrl.match(/\/(tree|blob)\/([^\/]+)(\/.*)?$/);
+  if (branchMatch) {
+    ref = branchMatch[2];
+    folderPath = branchMatch[3];
+
+    // Remove branch and path info from the repo URL
+    repoUrl = repoUrl.replace(/\/(tree|blob)\/([^\/]+)(\/.*)?$/, '');
+  }
 
   // Normalize URL to end with .git
   if (!repoUrl.endsWith('.git')) {
@@ -42,17 +61,30 @@ function extractRepoInfo(input: string): {
   // Extract repo name (last part of path before .git)
   const repoNameMatch = repoUrl.match(/\/([^\/]+)\.git$/);
   if (!repoNameMatch) {
-    return { repoUrl, repoName: 'repo', query: input };
+    return {
+      repoUrl,
+      repoName: 'repo',
+      ref,
+      folderPath,
+      query: restOfString,
+    };
   }
+
   const repoName = repoNameMatch[1];
+
   console.log({
     repoUrl,
     repoName,
+    ref,
+    folderPath,
     query: restOfString,
   });
+
   return {
     repoUrl,
     repoName,
+    ref,
+    folderPath,
     query: restOfString,
   };
 }
@@ -199,10 +231,10 @@ export function useChat({ onError }: { onError?: (e: unknown, messageToBeSent: s
     let hideMessage: ReturnType<typeof message.loading> | null;
 
     async function initMessage(initQuery: string) {
-      let { repoUrl, repoName, query } = extractRepoInfo(initQuery);
+      let { repoUrl, repoName, query, ref, folderPath } = extractRepoInfo(initQuery);
       console.log({ repoUrl, repoName, query });
       if (!repoUrl) {
-        repoUrl = window.prompt('Repo url please');
+        repoUrl = window.prompt('Repo url please') || undefined;
       }
       if (!repoUrl) {
         throw new Error('Repo url not provieded.');
@@ -216,10 +248,12 @@ export function useChat({ onError }: { onError?: (e: unknown, messageToBeSent: s
         url: repoUrl,
         corsProxy: gitCrosProxyRef.current,
         depth: 1,
+        singleBranch: true,
+        ref: ref,
       });
       hideMessage();
       hideMessage = message.loading('Selecting files, this may take some time...', 0);
-      const fileStructure = (await getFileStructure(repoPath, {})).join('\n');
+      const fileStructure = (await getFileStructure(path.join(repoPath, folderPath), {})).join('\n');
       const selectedFiles = await retriveFiles(
         async (messages) => {
           const response = await chatRef.current(messages);
@@ -232,12 +266,20 @@ export function useChat({ onError }: { onError?: (e: unknown, messageToBeSent: s
         fileStructure,
         query
       );
-      const opennedFiles = await Promise.all(
-        selectedFiles.map(async (filePath) => [
-          filePath,
-          (await fs.promises.readFile(path.join(repoPath, filePath), 'utf8')).toString(),
-        ])
-      );
+      const opennedFiles: [string, string][] = (
+        await Promise.all(
+          selectedFiles.map(async (filePath): Promise<[string, string] | null> => {
+            try {
+              return [
+                path.join(folderPath, filePath),
+                (await fs.promises.readFile(path.join(repoPath, folderPath, filePath), 'utf8')).toString(),
+              ];
+            } catch {
+              return null;
+            }
+          })
+        )
+      ).filter((a) => a !== null);
       hideMessage();
       const firstMessage: FirstMessageItem[] = [
         {

@@ -18,7 +18,21 @@ import {
   useClientOptions,
   useGitCorsProxy,
 } from './client';
-import { Badge, Button, Collapse, CollapseProps, Divider, Form, Input, message, Select, Space, Tooltip } from 'antd';
+import {
+  Badge,
+  Button,
+  Collapse,
+  CollapseProps,
+  Divider,
+  Form,
+  Input,
+  message,
+  Select,
+  Space,
+  // Tag,
+  Tooltip,
+  // Typography,
+} from 'antd';
 
 const roles: Record<string, BubbleProps> = {
   assistant: {
@@ -277,6 +291,13 @@ const AppHeader: React.FC<{ onSettings: () => void }> = ({ onSettings }) => {
   return (
     <>
       <Space>
+        {
+          // <Tag color="red" style={{ cursor: 'help' }} title="HTTP requests upgraded to HTTPS">
+          //           <Typography.Text strong delete type="danger">
+          //             https
+          //           </Typography.Text>
+          //         </Tag>
+        }
         {isLoading ? (
           <LoadingOutlined />
         ) : modelList ? (
