@@ -27,20 +27,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 
-import {
-  Badge,
-  Button,
-  Collapse,
-  CollapseProps,
-  Divider,
-  Input,
-  message,
-  Select,
-  Space,
-  theme,
-  Layout,
-  Spin,
-} from 'antd';
+import { Badge, Button, Collapse, CollapseProps, Divider, Input, Select, Space, theme, Layout, Spin } from 'antd';
 
 const { Header, Content, Footer } = Layout;
 
@@ -148,15 +135,15 @@ interface ChatContext {
   error: string | null;
 }
 
-const defaultContext: ChatContext = {
-  streamingText: '',
-  firstMessage: [],
-  chatHistory: [],
-  loadingState: null,
-  error: null,
-};
-
-const ChatDataContext = createContext<ChatContext>(defaultContext);
+function createDefaultContext(): ChatContext {
+  return {
+    streamingText: '',
+    firstMessage: [],
+    chatHistory: [],
+    loadingState: null,
+    error: null,
+  };
+}
 
 interface ChatMethods {
   sendMessage(message: string): void;
@@ -165,65 +152,23 @@ interface ChatMethods {
   newChat(): void;
 }
 
+const ChatDataContext = createContext<ChatContext>(createDefaultContext());
 const ChatMethodsContext = createContext<ChatMethods>({
   sendMessage() {},
   portRef: { current: null },
   setSelectedModel() {},
   newChat() {},
 });
-
 const CurrentUrlContext = createContext<string | undefined>(undefined);
-
 const SelectedModelContext = createContext<[string, Dispatch<SetStateAction<string>>]>(['', () => {}]);
 
-const ChatProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
-  const chatContextsRef = useRef<null | Map<string, ChatContext>>(null);
-
-  const portRef = useRef<ReturnType<typeof chrome.runtime.connect> | null>(null);
-  const [firstMessage, setFirstMessage] = useState<FirstMessageItem[]>([]);
-  const [messages, setMessages] = useState<ChatCompletionMessageParam[]>([]);
-  const [streamingText, setStreamingText] = useState('');
-  const [loadingState, setLoadingState] = useState<LoadingState>(null);
+const CurrentUrlProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
   const [currentTabUrl, setCurrentTabUrl] = useState<string | undefined>();
-  const [selectedModel, setSelectedModel_] = useState<string>(() => {
-    return window.localStorage.getItem('repochat_selected_model') || '';
-  });
-  const setSelectedModel: Dispatch<SetStateAction<string>> = useCallback(
-    (s: SetStateAction<string>) => {
-      if (typeof s === 'function') {
-        setSelectedModel_((prevS) => {
-          const nextS = s(prevS);
-          window.localStorage.setItem('repochat_selected_model', nextS);
-          return nextS;
-        });
-      } else {
-        window.localStorage.setItem('repochat_selected_model', s);
-        setSelectedModel_(s);
-      }
-    },
-    [setSelectedModel_]
-  );
-
-  const setContext = useCallback(
-    (chatContext: ChatContext = defaultContext) => {
-      setFirstMessage(chatContext.firstMessage);
-      setMessages(chatContext.chatHistory);
-      setStreamingText(chatContext.streamingText);
-      setLoadingState(chatContext.loadingState);
-    },
-    [setFirstMessage, setMessages, setStreamingText, setLoadingState]
-  );
 
   useEffect(() => {
     // Listen for tab switches
     const handleUrlUpdate = (url?: string) => {
       setCurrentTabUrl(url);
-      if (!url) return;
-      if (!chatContextsRef.current) {
-        chatContextsRef.current = new Map();
-      }
-      const chatContext = chatContextsRef.current.get(url);
-      setContext(chatContext);
     };
     chrome.tabs.query({ active: true, lastFocusedWindow: true }).then((tabs) => {
       handleUrlUpdate(tabs[0].url);
@@ -247,55 +192,117 @@ const ChatProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
       chrome.tabs.onActivated.removeListener(handleActivated);
       chrome.tabs.onUpdated.removeListener(handleUpdated);
     };
-  }, [setContext]);
+  }, [setCurrentTabUrl]);
+
+  return <CurrentUrlContext.Provider value={currentTabUrl}>{children}</CurrentUrlContext.Provider>;
+};
+
+const ChatProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
+  const currentTabUrl = useContext(CurrentUrlContext);
+  const currentTabUrlRef = useRef<string | undefined>(undefined);
+
+  const chatContextsRef = useRef<Map<string, ChatContext>>(new Map());
+
+  const portRef = useRef<ReturnType<typeof chrome.runtime.connect> | null>(null);
+  const [firstMessage, setFirstMessage] = useState<FirstMessageItem[]>([]);
+  const [messages, setMessages] = useState<ChatCompletionMessageParam[]>([]);
+  const [streamingText, setStreamingText] = useState('');
+  const [loadingState, setLoadingState] = useState<LoadingState>(null);
+
+  const [selectedModel, setSelectedModel_] = useState<string>(() => {
+    return window.localStorage.getItem('repochat_selected_model') || '';
+  });
+
+  const setSelectedModel: Dispatch<SetStateAction<string>> = useCallback(
+    (s: SetStateAction<string>) => {
+      if (typeof s === 'function') {
+        setSelectedModel_((prevS) => {
+          const nextS = s(prevS);
+          window.localStorage.setItem('repochat_selected_model', nextS);
+          return nextS;
+        });
+      } else {
+        window.localStorage.setItem('repochat_selected_model', s);
+        setSelectedModel_(s);
+      }
+    },
+    [setSelectedModel_]
+  );
+
+  const setContext = useCallback(
+    (chatContext: ChatContext = createDefaultContext()) => {
+      setFirstMessage(chatContext.firstMessage);
+      setMessages(chatContext.chatHistory);
+      setStreamingText(chatContext.streamingText);
+      console.log('[chatContext.loadingState]', chatContext.loadingState);
+      setLoadingState(chatContext.loadingState);
+    },
+    [setFirstMessage, setMessages, setStreamingText, setLoadingState]
+  );
+
+  useEffect(() => {
+    currentTabUrlRef.current = currentTabUrl;
+    if (!currentTabUrl) return;
+    const chatContext = chatContextsRef.current.get(currentTabUrl);
+    setContext(chatContext ?? createDefaultContext());
+  }, [currentTabUrl, setContext, chatContextsRef]);
 
   useEffect(() => {
     const port = chrome.runtime.connect({ name: 'repochat' });
-    let text = '';
     port.onMessage.addListener((msg: ChatEvent) => {
+      const chatContext = chatContextsRef.current.get(msg.requestId);
+      if (!chatContext) return;
+      console.log('[msg]', msg);
       switch (msg.type) {
         case 'cloning':
         case 'retrieving':
         case 'prompt_processing':
-          message.info(msg.type);
-          if (msg.inProgress) setLoadingState(msg.type);
+          if (msg.inProgress) {
+            chatContext.loadingState = msg.type;
+          }
           break;
         case 'streaming':
           if (msg.chunk !== null) {
-            text += msg.chunk;
-            setStreamingText(text);
-            setLoadingState(null);
+            chatContext.streamingText += msg.chunk;
+            chatContext.loadingState = null;
           } else {
-            const content = text;
-            setMessages((msgs) => [...msgs, { role: 'assistant', content }]);
-            setStreamingText('');
-            text = '';
+            const content = chatContext.streamingText;
+            chatContext.chatHistory = [...chatContext.chatHistory, { role: 'assistant', content }];
+            chatContext.streamingText = '';
           }
           break;
         case 'initial_message':
-          setFirstMessage(msg.content);
-          setMessages([{ role: 'user', content: msg.formatted }]);
+          chatContext.firstMessage = msg.content;
+          chatContext.chatHistory = [{ role: 'user', content: msg.formatted }];
           break;
         case 'append_message':
           break;
         case 'error':
           break;
       }
+      if (msg.requestId === currentTabUrlRef.current) {
+        setContext(chatContext);
+      }
     });
 
     portRef.current = port;
 
     return () => {
-      setLoadingState(null);
       port.disconnect();
       portRef.current = null;
     };
-  }, [portRef, setMessages, setStreamingText, setLoadingState]);
+  }, [portRef, currentTabUrlRef]);
 
   const sendMessage = useCallback(
     (message: string) => {
       if (!currentTabUrl) return;
+      let chatContext = chatContextsRef.current.get(currentTabUrl);
+      if (!chatContext) {
+        chatContext = createDefaultContext();
+        chatContextsRef.current.set(currentTabUrl, chatContext);
+      }
       const request: SendMessageRequest = {
+        requestId: currentTabUrl,
         repoUrl: currentTabUrl,
         chatHistory: messages,
         messageToBeSent: message,
@@ -306,8 +313,9 @@ const ChatProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
         completionParams: { model: selectedModel },
       };
       portRef.current?.postMessage(postMessage);
-      if (messages.length) {
-        setMessages([...messages, { role: 'user', content: message }]);
+      if (chatContext.chatHistory.length) {
+        chatContext.chatHistory = [...chatContext.chatHistory, { role: 'user', content: message }];
+        setMessages(chatContext.chatHistory);
       }
     },
     [messages, selectedModel, setMessages, portRef, currentTabUrl]
@@ -326,11 +334,9 @@ const ChatProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
 
   return (
     <SelectedModelContext.Provider value={[selectedModel, setSelectedModel]}>
-      <CurrentUrlContext.Provider value={currentTabUrl}>
-        <ChatMethodsContext.Provider value={methods}>
-          <ChatDataContext.Provider value={chatData}>{children}</ChatDataContext.Provider>
-        </ChatMethodsContext.Provider>
-      </CurrentUrlContext.Provider>
+      <ChatMethodsContext.Provider value={methods}>
+        <ChatDataContext.Provider value={chatData}>{children}</ChatDataContext.Provider>
+      </ChatMethodsContext.Provider>
     </SelectedModelContext.Provider>
   );
 };
@@ -531,8 +537,10 @@ const App: React.FC = () => {
 
 export default function Panel() {
   return (
-    <ChatProvider>
-      <App />
-    </ChatProvider>
+    <CurrentUrlProvider>
+      <ChatProvider>
+        <App />
+      </ChatProvider>
+    </CurrentUrlProvider>
   );
 }

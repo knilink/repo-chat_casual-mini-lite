@@ -4,7 +4,7 @@ import LightningFS from '@isomorphic-git/lightning-fs';
 import http from 'isomorphic-git/http/web';
 import { OpenAI } from 'openai';
 
-import type { FirstMessageItem, ChatEvent, ChatCompletionMessageParam } from '../../types';
+import type { FirstMessageItem, ChatEvent, ChatCompletionMessageParam, SendMessageRequest } from '../../types';
 import type { ChatCompletionCreateParamsStreaming } from 'openai/resources';
 const fs = new LightningFS('fs');
 
@@ -195,8 +195,7 @@ function extractRepoInfo(input: string): {
 async function initMessage(
   eventDispatcher: (event: ChatEvent) => void,
   chatCompletionCreateParams: Pick<ChatCompletionCreateParamsStreaming, 'model'>,
-  repoUrl_: string,
-  query: string
+  { requestId, repoUrl: repoUrl_, messageToBeSent: query }: SendMessageRequest
 ) {
   let { repoUrl, repoName, ref, folderPath } = extractRepoInfo(repoUrl_);
 
@@ -205,7 +204,7 @@ async function initMessage(
   }
 
   const repoPath = `/${repoName}`;
-  eventDispatcher({ type: 'cloning', inProgress: true });
+  eventDispatcher({ type: 'cloning', requestId, inProgress: true });
   console.log({
     dir: repoPath,
     url: repoUrl,
@@ -222,8 +221,8 @@ async function initMessage(
     ref,
     // corsProxy: 'https://cors.isomorphic-git.org',
   });
-  eventDispatcher({ type: 'cloning', inProgress: false });
-  eventDispatcher({ type: 'retrieving', inProgress: true });
+  eventDispatcher({ type: 'cloning', requestId, inProgress: false });
+  eventDispatcher({ type: 'retrieving', requestId, inProgress: true });
   const fileStructure = (await getFileStructure(path.join(repoPath, folderPath), { excludeDirs: /\/\.[^\/]+/ })).join(
     '\n'
   );
@@ -258,7 +257,7 @@ async function initMessage(
       })
     )
   ).filter((a) => a !== null);
-  eventDispatcher({ type: 'retrieving', inProgress: false });
+  eventDispatcher({ type: 'retrieving', requestId, inProgress: false });
   const firstMessage: FirstMessageItem[] = [
     {
       type: 'text',
@@ -283,19 +282,15 @@ ${query}`,
 export async function sendChatMessage(
   eventDispatcher: (event: ChatEvent) => void,
   chatCompletionCreateParams: Pick<ChatCompletionCreateParamsStreaming, 'model'>,
-  request: { chatHistory: ChatCompletionMessageParam[]; messageToBeSent: string; repoUrl: string }
+  request: SendMessageRequest
 ) {
+  const { requestId } = request;
   console.log({ request, openAIClient });
   if (!request || !openAIClient) return;
   try {
     let messageContent = request.messageToBeSent;
     if (!request.chatHistory.length) {
-      const firstMessage = await initMessage(
-        eventDispatcher,
-        chatCompletionCreateParams,
-        request.repoUrl,
-        request.messageToBeSent
-      );
+      const firstMessage = await initMessage(eventDispatcher, chatCompletionCreateParams, request);
       messageContent = firstMessage
         .map((item) => {
           if (item.type === 'text') return item.text;
@@ -305,32 +300,32 @@ ${item.fileContent}
 \end{file_cotent}`;
         })
         .join('\n\n');
-      eventDispatcher({ type: 'initial_message', content: firstMessage, formatted: messageContent });
+      eventDispatcher({ type: 'initial_message', requestId, content: firstMessage, formatted: messageContent });
     }
 
     const newMessage: { role: 'user'; content: string } = { role: 'user', content: messageContent };
 
     const newMessages: ChatCompletionMessageParam[] = [...request.chatHistory, newMessage];
-    eventDispatcher({ type: 'append_message', message: newMessage });
-    eventDispatcher({ type: 'prompt_processing', inProgress: true });
+    eventDispatcher({ type: 'append_message', requestId, message: newMessage });
+    eventDispatcher({ type: 'prompt_processing', requestId, inProgress: true });
 
     const response = await openAIClient.chat.completions.create({
       ...chatCompletionCreateParams,
       stream: true,
       messages: newMessages,
     });
-    eventDispatcher({ type: 'prompt_processing', inProgress: false });
+    eventDispatcher({ type: 'prompt_processing', requestId, inProgress: false });
 
     for await (const part of response) {
       // Check if aborted before processing each chunk
       const chunk = part.choices[0].delta.content;
       if (!chunk) continue;
-      eventDispatcher({ type: 'streaming', chunk });
+      eventDispatcher({ type: 'streaming', requestId, chunk });
     }
-    eventDispatcher({ type: 'streaming', chunk: null });
+    eventDispatcher({ type: 'streaming', requestId, chunk: null });
   } catch (error) {
     console.error(error);
-    eventDispatcher({ type: 'error', errorMessage: (error as any)?.message });
+    eventDispatcher({ type: 'error', requestId, errorMessage: (error as any)?.message });
   }
 }
 
