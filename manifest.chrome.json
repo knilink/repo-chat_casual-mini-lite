@@ -1,0 +1,7 @@
+{
+  "action": {},
+  "side_panel": {
+    "default_path": "src/pages/panel/index.html"
+  },
+  "permissions": ["activeTab", "sidePanel", "storage"]
+}

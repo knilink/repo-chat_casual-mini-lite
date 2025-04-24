@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "RepoChat",
+  "description": "Chat with Github repos",
+  "options_ui": {
+    "page": "src/pages/options/index.html"
+  },
+  "icons": {
+  },
+  "permissions": ["activeTab", "storage"],
+  "devtools_page": "src/pages/devtools/index.html",
+  "host_permissions": ["*://github.com/*"],
+  "web_accessible_resources": [
+    {
+      "resources": [],
+      "matches": []
+    }
+  ]
+}

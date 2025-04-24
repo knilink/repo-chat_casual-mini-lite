@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "RepoChat",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "description in src/locales/en/messages.json",
+    "description": "Chat with Github repos"
+  }
+}

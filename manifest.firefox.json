@@ -1,0 +1,17 @@
+{
+  "action": {},
+  "sidebar_action": {
+    "default_panel": "src/pages/panel/index.html"
+  },
+  "page_action": {
+    "default_icon": "side-view.svg",
+    "default_title": "Open Side View",
+    "show_matches": ["*://github.com/*"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "addon@example.com2"
+    }
+  },
+  "permissions": ["activeTab", "tabs", "storage", "webRequest", "webRequestBlocking"]
+}
