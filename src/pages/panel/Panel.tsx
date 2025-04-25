@@ -150,6 +150,7 @@ interface ChatMethods {
   portRef: RefObject<ReturnType<typeof chrome.runtime.connect> | null>;
   setSelectedModel(modelId: string): void;
   newChat(): void;
+  abort(): void;
 }
 
 const ChatDataContext = createContext<ChatContext>(createDefaultContext());
@@ -158,6 +159,7 @@ const ChatMethodsContext = createContext<ChatMethods>({
   portRef: { current: null },
   setSelectedModel() {},
   newChat() {},
+  abort() {},
 });
 const CurrentUrlContext = createContext<string | undefined>(undefined);
 const SelectedModelContext = createContext<[string, Dispatch<SetStateAction<string>>]>(['', () => {}]);
@@ -234,7 +236,6 @@ const ChatProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
       setFirstMessage(chatContext.firstMessage);
       setMessages(chatContext.chatHistory);
       setStreamingText(chatContext.streamingText);
-      console.log('[chatContext.loadingState]', chatContext.loadingState);
       setLoadingState(chatContext.loadingState);
     },
     [setFirstMessage, setMessages, setStreamingText, setLoadingState]
@@ -275,6 +276,17 @@ const ChatProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
           chatContext.firstMessage = msg.content;
           chatContext.chatHistory = [{ role: 'user', content: msg.formatted }];
           break;
+        case 'aborted':
+          if (chatContext.streamingText) {
+            const content = chatContext.streamingText;
+            chatContext.chatHistory = [
+              ...chatContext.chatHistory,
+              { role: 'assistant', content: chatContext.streamingText },
+            ];
+            chatContext.streamingText = '';
+          }
+          chatContext.loadingState = null;
+          break;
         case 'append_message':
           break;
         case 'error':
@@ -295,6 +307,7 @@ const ChatProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
 
   const sendMessage = useCallback(
     (message: string) => {
+      const currentTabUrl = currentTabUrlRef.current;
       if (!currentTabUrl) return;
       let chatContext = chatContextsRef.current.get(currentTabUrl);
       if (!chatContext) {
@@ -318,13 +331,36 @@ const ChatProvider: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
         setMessages(chatContext.chatHistory);
       }
     },
-    [messages, selectedModel, setMessages, portRef, currentTabUrl]
+    [messages, selectedModel, setMessages, portRef, currentTabUrlRef]
   );
-  console.log({ messages });
+
+  const abort = useCallback(() => {
+    console.log('[currentTabUrlRef.current]', currentTabUrlRef.current);
+    if (!currentTabUrlRef.current) return;
+    const postMessage: RepochatMessage = {
+      action: 'abort',
+      requestId: currentTabUrlRef.current,
+    };
+    portRef.current?.postMessage(postMessage);
+  }, [portRef, currentTabUrlRef]);
+
+  const newChat = useCallback(() => {
+    const newContext = createDefaultContext();
+    if (currentTabUrlRef.current && chatContextsRef.current.has(currentTabUrlRef.current)) {
+      chatContextsRef.current.set(currentTabUrlRef.current, newContext);
+    }
+    setContext(newContext);
+  }, [currentTabUrlRef, chatContextsRef]);
 
   const methods: ChatMethods = useMemo(
-    () => ({ sendMessage, portRef, setSelectedModel, newChat: setContext }),
-    [sendMessage, setSelectedModel, setContext]
+    () => ({
+      sendMessage,
+      portRef,
+      setSelectedModel,
+      newChat,
+      abort,
+    }),
+    [sendMessage, setSelectedModel, setContext, abort, newChat]
   );
 
   const chatData: ChatContext = useMemo(
@@ -347,7 +383,7 @@ const ChatPannel: React.FC = () => {
   const submitMessageRef = useRef<string>('');
 
   const { firstMessage, chatHistory: messages, loadingState, streamingText } = useContext(ChatDataContext);
-  const { sendMessage, portRef } = useContext(ChatMethodsContext);
+  const { sendMessage, portRef, abort } = useContext(ChatMethodsContext);
   const currentTabUrl = useContext(CurrentUrlContext);
 
   useEffect(() => {
@@ -447,6 +483,8 @@ const ChatPannel: React.FC = () => {
       break;
   }
 
+  const isLoading = !!streamingText || !!loadingState;
+
   return (
     <Layout>
       <Content
@@ -473,10 +511,12 @@ const ChatPannel: React.FC = () => {
         }}
       >
         <Sender
+          loading={isLoading}
           placeholder={currentTabUrl}
           value={content}
           onChange={setContent}
           onSubmit={handleSend}
+          onCancel={abort}
           submitType="enter"
         />
       </Footer>

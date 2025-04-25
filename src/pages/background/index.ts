@@ -19,8 +19,11 @@ if (chrome.sidePanel) {
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'repochat') {
+    const abortControllers = new Map<string, AbortController>();
     port.onMessage.addListener(async (msg: RepochatMessage) => {
       if (msg.action === 'sendMessage') {
+        const abortController = new AbortController();
+        abortControllers.set(msg.request.requestId, abortController);
         console.log('[sendMessage]', msg);
         const repoUrl = msg.request.repoUrl;
         if (!repoUrl) return;
@@ -30,8 +33,13 @@ chrome.runtime.onConnect.addListener((port) => {
             port.postMessage(event);
           },
           msg.completionParams,
-          msg.request
+          msg.request,
+          abortController.signal
         );
+      } else if (msg.action === 'abort') {
+        console.log('[abort]', msg);
+        abortControllers.get(msg.requestId)?.abort();
+        abortControllers.delete(msg.requestId);
       } else if (msg.action === 'listModels') {
         console.log('[listModels]', msg);
         // const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });

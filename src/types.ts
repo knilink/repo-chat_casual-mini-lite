@@ -22,7 +22,8 @@ export type ChatEvent = { requestId: string } & (
   | { type: 'streaming'; chunk: string | null }
   | { type: 'initial_message'; content: FirstMessageItem[]; formatted: string }
   | { type: 'append_message'; message: { role: string; content: string } }
-  | { type: 'error'; errorMessage?: string }
+  | { type: 'error'; error?: { name?: string; message?: string } }
+  | { type: 'aborted' }
 );
 
 export type ChatCompletionMessageParam = ChatCompletionUserMessageParam | ChatCompletionAssistantMessageParam;
@@ -39,6 +40,10 @@ export type RepochatMessage =
       action: 'sendMessage';
       request: SendMessageRequest;
       completionParams: Pick<ChatCompletionCreateParamsStreaming, 'model'>;
+    }
+  | {
+      action: 'abort';
+      requestId: string;
     }
   | {
       action: 'listModels';

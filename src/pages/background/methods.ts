@@ -192,10 +192,17 @@ function extractRepoInfo(input: string): {
   };
 }
 
+function assertAbort(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new Error('Request was aborted.');
+  }
+}
+
 async function initMessage(
   eventDispatcher: (event: ChatEvent) => void,
   chatCompletionCreateParams: Pick<ChatCompletionCreateParamsStreaming, 'model'>,
-  { requestId, repoUrl: repoUrl_, messageToBeSent: query }: SendMessageRequest
+  { requestId, repoUrl: repoUrl_, messageToBeSent: query }: SendMessageRequest,
+  signal?: AbortSignal
 ) {
   let { repoUrl, repoName, ref, folderPath } = extractRepoInfo(repoUrl_);
 
@@ -221,6 +228,7 @@ async function initMessage(
     ref,
     // corsProxy: 'https://cors.isomorphic-git.org',
   });
+  assertAbort(signal);
   eventDispatcher({ type: 'cloning', requestId, inProgress: false });
   eventDispatcher({ type: 'retrieving', requestId, inProgress: true });
   const fileStructure = (await getFileStructure(path.join(repoPath, folderPath), { excludeDirs: /\/\.[^\/]+/ })).join(
@@ -229,11 +237,14 @@ async function initMessage(
   console.log({ fileStructure });
   const selectedFiles = await retriveFiles(
     async (messages) => {
-      const response = await openAIClient.chat.completions.create({
-        ...chatCompletionCreateParams,
-        stream: true,
-        messages,
-      });
+      const response = await openAIClient.chat.completions.create(
+        {
+          ...chatCompletionCreateParams,
+          stream: true,
+          messages,
+        },
+        { signal }
+      );
       let responseMessage = '';
       for await (const part of response) {
         responseMessage += part.choices[0].delta.content;
@@ -269,7 +280,7 @@ async function initMessage(
       type: 'text',
       text: `[INSTRUCTION]
 
-You are an expert software engineer. Answer the following user query using provided context retrieved from the \`{repoName}\` repository.
+You are an expert software engineer. Answer the following user query using provided context retrieved from the \`${repoName}\` repository.
 
 [USER QUERY]
 
@@ -282,7 +293,8 @@ ${query}`,
 export async function sendChatMessage(
   eventDispatcher: (event: ChatEvent) => void,
   chatCompletionCreateParams: Pick<ChatCompletionCreateParamsStreaming, 'model'>,
-  request: SendMessageRequest
+  request: SendMessageRequest,
+  signal: AbortSignal
 ) {
   const { requestId } = request;
   console.log({ request, openAIClient });
@@ -291,6 +303,7 @@ export async function sendChatMessage(
     let messageContent = request.messageToBeSent;
     if (!request.chatHistory.length) {
       const firstMessage = await initMessage(eventDispatcher, chatCompletionCreateParams, request);
+      assertAbort(signal);
       messageContent = firstMessage
         .map((item) => {
           if (item.type === 'text') return item.text;
@@ -309,13 +322,15 @@ ${item.fileContent}
     eventDispatcher({ type: 'append_message', requestId, message: newMessage });
     eventDispatcher({ type: 'prompt_processing', requestId, inProgress: true });
 
-    const response = await openAIClient.chat.completions.create({
-      ...chatCompletionCreateParams,
-      stream: true,
-      messages: newMessages,
-    });
+    const response = await openAIClient.chat.completions.create(
+      {
+        ...chatCompletionCreateParams,
+        stream: true,
+        messages: newMessages,
+      },
+      { signal }
+    );
     eventDispatcher({ type: 'prompt_processing', requestId, inProgress: false });
-
     for await (const part of response) {
       // Check if aborted before processing each chunk
       const chunk = part.choices[0].delta.content;
@@ -324,8 +339,20 @@ ${item.fileContent}
     }
     eventDispatcher({ type: 'streaming', requestId, chunk: null });
   } catch (error) {
-    console.error(error);
-    eventDispatcher({ type: 'error', requestId, errorMessage: (error as any)?.message });
+    if (
+      // work around
+      (error as any).message?.includes('aborted')
+    ) {
+      console.log('[AbortError]', error);
+      eventDispatcher({ type: 'aborted', requestId });
+    } else {
+      console.error(error);
+      eventDispatcher({
+        type: 'error',
+        requestId,
+        error: { name: (error as any).name, message: (error as any)?.message },
+      });
+    }
   }
 }
 
