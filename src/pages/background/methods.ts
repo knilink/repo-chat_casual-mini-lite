@@ -118,13 +118,13 @@ ${query}`;
   return [...new Set(selectedFiles)];
 }
 
-function extractRepoInfo(input: string): {
+async function extractRepoInfo(input: string): Promise<{
   repoUrl?: string;
   repoName?: string;
   ref?: string;
   folderPath: string;
   query: string;
-} {
+}> {
   // Match the first URL in the string
   const urlMatch = input.match(
     /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/
@@ -141,14 +141,14 @@ function extractRepoInfo(input: string): {
   const restOfString = input.slice(urlMatch.index! + repoUrl.length).trim();
 
   // Extract branch name and folder path before normalizing the URL
+  let paths: string[] | undefined;
   let ref: string | undefined;
   let folderPath: string = '';
 
   // Check for GitHub or similar patterns like /tree/branch/path or /blob/branch/path
-  const branchMatch = repoUrl.match(/\/(tree|blob)\/([^\/]+)(\/.*)?$/);
+  const branchMatch = repoUrl.match(/\/(tree|blob)\/(.*)?$/);
   if (branchMatch) {
-    ref = branchMatch[2];
-    folderPath = branchMatch[3];
+    paths = branchMatch[2].split('/');
 
     // Remove branch and path info from the repo URL
     repoUrl = repoUrl.replace(/\/(tree|blob)\/([^\/]+)(\/.*)?$/, '');
@@ -159,6 +159,31 @@ function extractRepoInfo(input: string): {
     // Remove trailing slash if present
     repoUrl = repoUrl.replace(/\/$/, '');
     repoUrl += '.git';
+  }
+
+  if (paths) {
+    if (paths.length === 1) {
+      ref = decodeURIComponent(paths[0]);
+    } else {
+      let potentialPrefix = `refs/heads/${decodeURIComponent(paths[0])}`;
+      const remoteRefs = await git.listServerRefs({
+        http,
+        url: 'https://github.com/ollama/ollama-js',
+        prefix: potentialPrefix,
+      });
+      if (remoteRefs.some(({ ref }) => ref === potentialPrefix)) {
+        ref = potentialPrefix;
+        folderPath = paths.slice(1).join(path.sep);
+      } else {
+        for (let i = 2; i < paths.length; i++) {
+          const potentialRef = potentialPrefix + '/' + paths.slice(1, i).join('/');
+          if (remoteRefs.some(({ ref }) => ref === potentialRef)) {
+            ref = potentialRef;
+            folderPath = paths.slice(i).join(path.sep);
+          }
+        }
+      }
+    }
   }
 
   // Extract repo name (last part of path before .git)
@@ -204,7 +229,7 @@ async function initMessage(
   { requestId, repoUrl: repoUrl_, messageToBeSent: query }: SendMessageRequest,
   signal?: AbortSignal
 ) {
-  let { repoUrl, repoName, ref, folderPath } = extractRepoInfo(repoUrl_);
+  let { repoUrl, repoName, ref, folderPath } = await extractRepoInfo(repoUrl_);
 
   if (!repoUrl) {
     throw new Error('Repo url not provieded.');
@@ -217,6 +242,7 @@ async function initMessage(
     url: repoUrl,
     ref: ref,
   });
+
   await git.clone({
     fs,
     http,
